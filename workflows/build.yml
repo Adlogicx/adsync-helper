@@ -1,0 +1,104 @@
+name: Build AdSync Helper APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:        # lets you trigger a build manually from GitHub UI
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+
+      # ── 1. Checkout your code ──────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Python ──────────────────────────────────────────────────
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      # ── 3. Cache buildozer's huge Android SDK/NDK download ────────────────
+      #       First build: 20-30 min. Cached builds: 3-5 min.
+      - name: Cache buildozer global dir
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildozer
+          key: buildozer-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('requirements*.txt') }}
+          restore-keys: pip-
+
+      # ── 4. Install system dependencies ────────────────────────────────────
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            git zip unzip openjdk-17-jdk \
+            autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libffi-dev \
+            libssl-dev cmake libltdl-dev
+
+      # ── 5. Install Python build tools ─────────────────────────────────────
+      - name: Install buildozer + cython
+        run: |
+          pip install --upgrade pip
+          pip install buildozer cython==0.29.36
+
+      # ── 6. Accept Android SDK licences (non-interactive) ──────────────────
+      - name: Accept Android SDK licences
+        run: |
+          mkdir -p ~/.android
+          touch ~/.android/repositories.cfg
+          yes | buildozer android debug 2>&1 | head -5 || true
+
+      # ── 7. Build the APK ──────────────────────────────────────────────────
+      - name: Build debug APK
+        run: buildozer android debug
+        env:
+          BUILDOZER_WARN_ON_ROOT: "0"
+
+      # ── 8. Rename APK to something clean ──────────────────────────────────
+      - name: Rename APK
+        run: |
+          mkdir -p output
+          cp bin/*.apk output/AdSyncHelper.apk
+          echo "APK_PATH=output/AdSyncHelper.apk" >> $GITHUB_ENV
+
+      # ── 9. Upload APK as a build artifact (always available) ──────────────
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AdSyncHelper-debug
+          path: output/AdSyncHelper.apk
+          retention-days: 30
+
+      # ── 10. Create a GitHub Release with the APK attached ─────────────────
+      #        Tag = v1.0-build-<run_number>  e.g. v1.0-build-7
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0-build-${{ github.run_number }}
+          name: "AdSync Helper — Build #${{ github.run_number }}"
+          body: |
+            Auto-built from commit ${{ github.sha }}
+
+            ## Install instructions
+            1. Download **AdSyncHelper.apk** below
+            2. On your Android phone: Settings → Security → enable "Install unknown apps"
+            3. Open the downloaded APK and tap Install
+            4. Open the app and tap **START SHARING**
+          files: output/AdSyncHelper.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
